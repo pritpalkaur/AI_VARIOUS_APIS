@@ -1,4 +1,4 @@
-# Store system: Auth, Product and Order APIs + gateway + React client
+# Store system: Auth, Product and Order APIs + gateway + Angular client
 
 Three REST APIs that share one SQL Server database, an API gateway in front of them, and a web client. Everything runs on your own machine. There are no cloud services.
 
@@ -8,11 +8,11 @@ Three REST APIs that share one SQL Server database, an API gateway in front of t
 | `auth-service` | C# / ASP.NET Core (.NET 10), `Microsoft.Data.SqlClient`, BCrypt, Serilog | **5001** | Register, log in, issue JWTs |
 | `product-service` | Node.js / Express 5, `mssql`, winston | **5002** | Product CRUD (writes need the Admin role) |
 | `order-service` | Rust / Axum 0.8, `tiberius` + `bb8`, tracing | **5003** | Order CRUD (a User sees only their own orders) |
-| `client` | React 19 + Vite 8 | **5173** | Login, products, orders |
+| `client` | Angular 21 (standalone components, signals, zoneless) | **5173** | Login, products, orders |
 | `database` | SQL Server 2017 or newer | 1433 | **One database per service**: `AuthDb`, `ProductApiDb`, `OrderApiDb` (login `user1`) |
 
 ```
- Browser (React, :5173)
+ Browser (Angular, :5173)
    │  every request: http://localhost:5000/api/...   (Authorization: Bearer <JWT>)
    ▼
  API Gateway :5000  (YARP)   - CORS for the client, JWT check (login/register are public)
@@ -157,7 +157,7 @@ Leave everything else at the defaults. **Don't add `PORT`** to the shared file: 
 
 **Per-service overrides (optional):** a service also reads its own `<service>/.env` *before* the shared file, so any value there wins for that service only. The per-service `.env.example` files list every setting a service understands. Real environment variables beat both files.
 
-The client is separate: Vite only reads `client/.env`, which is optional because its default already points to the gateway.
+The client doesn't use `.env`: its only setting, the gateway URL, lives in `client/src/app/core/api.config.ts` (default `http://localhost:5000`).
 
 If you use per-service files instead, these values must line up:
 
@@ -237,12 +237,22 @@ Windows may show a firewall prompt the first time each service starts. All servi
 ```powershell
 cd C:\AI_VARIOUS_APIS\client
 npm install        # first time only
-npm run dev
+npm start          # = ng serve, on http://localhost:5173 (reloads when files change)
 ```
 
-Open **http://localhost:5173**. The client sends **every** request to the gateway (`VITE_API_GATEWAY_URL`, default `http://localhost:5000`). It must run on exactly port 5173, because the gateway only accepts browser requests (CORS) from `http://localhost:5173`. Vite is configured with `strictPort`, so it fails instead of silently switching to another port.
+The client is **Angular 21**. It needs Node.js 20.19+ or 22.12+; Angular 22 would need Node 22.22.3+.
 
-For a production build, run `npm run build` and then `npm run preview`.
+Open **http://localhost:5173**. The client sends **every** request to the gateway (`API_GATEWAY_URL` in `src/app/core/api.config.ts`, default `http://localhost:5000`). It must run on port 5173, because the gateway only accepts browser requests (CORS) from `http://localhost:5173`; the port is set in `angular.json` under `serve.options`.
+
+How it's built:
+
+| Folder | Contents |
+|---|---|
+| `src/app/core/` | `AuthService` (JWT and user as signals, in `sessionStorage`), `apiInterceptor` (adds the bearer token, maps errors, logs out on 401), route guards, and `ProductService` / `OrderService` |
+| `src/app/pages/` | login, register, products list and form, orders list and form, each lazy-loaded |
+| `src/app/shared/` | navbar, alert, pagination, sortable table header |
+
+For a production build, run `npm run build`. The output goes to `client/dist/angular-client/`.
 
 ---
 
@@ -640,7 +650,8 @@ The full flow, with all services running, is covered by the curl examples in sec
 | `401 Missing or invalid access token` from Product or Order, but login works | `JWT_SECRET`, `JWT_ISSUER` or `JWT_AUDIENCE` differ between the `.env` files. They must be identical. Restart the service after editing. |
 | `403 FORBIDDEN` right after promoting to Admin | Log out and log in again to get a token with the new role. |
 | Browser shows CORS errors | The client must be on `http://localhost:5173`, not `127.0.0.1`. Check `CORS_ORIGIN` in `api-gateway/.env`. |
-| Client shows "Cannot reach the API gateway" | The gateway isn't running on port 5000, or `VITE_API_GATEWAY_URL` in `client/.env` points elsewhere. |
+| Client shows "Cannot reach the API gateway" | The gateway isn't running on port 5000, or `API_GATEWAY_URL` in `client/src/app/core/api.config.ts` points elsewhere. |
+| `npm start` in `client` says the Angular CLI needs a newer Node | You're on Node older than 20.19 / 22.12. Update Node.js. |
 | `502 BAD_GATEWAY` "The X service is unavailable" | That service isn't running, or the gateway's `*_SERVICE_URL` points to the wrong port. |
 | `401` at the gateway, but the token works when calling the service directly | The gateway's `JWT_SECRET`, `JWT_ISSUER` or `JWT_AUDIENCE` differ from the Auth Service's. |
 | `Invalid configuration: …` at startup | The listed settings are missing or invalid in that service's `.env`. |
@@ -658,7 +669,7 @@ AI_VARIOUS_APIS/
 ├── auth-service/     Controllers → Services → Repositories → Data (SqlConnectionFactory); openapi.yaml
 ├── product-service/  routes → controllers → services → repositories → db/pool.js; openapi.yaml
 ├── order-service/    routes.rs → handlers → services → repositories → db.rs (bb8 pool); openapi.yaml
-└── client/           pages, components, api (fetch wrapper), context (auth)
+└── client/           Angular 21: src/app/core (auth, interceptor, guards, API services), pages, shared
 ```
 
 **Rules every service follows:**

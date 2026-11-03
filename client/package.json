@@ -1,21 +1,30 @@
 {
-  "name": "client",
-  "version": "1.0.0",
-  "description": "React + Vite web client for the Auth, Product and Order services",
-  "private": true,
-  "type": "module",
+  "name": "angular-client",
+  "version": "0.0.0",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "ng": "ng",
+    "start": "ng serve",
+    "build": "ng build",
+    "watch": "ng build --watch --configuration development",
+    "test": "ng test"
   },
+  "private": true,
+  "packageManager": "npm@11.6.0",
   "dependencies": {
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "react-router": "^7.18.5"
+    "@angular/common": "^21.2.0",
+    "@angular/compiler": "^21.2.0",
+    "@angular/core": "^21.2.0",
+    "@angular/forms": "^21.2.0",
+    "@angular/platform-browser": "^21.2.0",
+    "@angular/router": "^21.2.0",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^6.2.1",
-    "vite": "^8.3.5"
+    "@angular/build": "^21.2.29",
+    "@angular/cli": "^21.2.29",
+    "@angular/compiler-cli": "^21.2.0",
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.2"
   }
 }
