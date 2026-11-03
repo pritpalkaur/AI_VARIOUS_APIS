@@ -5,23 +5,28 @@ use axum::extract::Request;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use serde_json::json;
 use tower_http::cors::CorsLayer;
+use utoipa_swagger_ui::{Config, SwaggerUi};
 
 use crate::auth::JwtValidator;
+use crate::clients::product_client::ProductClient;
 use crate::config::JwtConfig;
 use crate::db::DbPool;
 use crate::error::AppError;
 use crate::handlers::orders;
 use crate::repositories::order_repository::OrderRepository;
-use crate::repositories::product_repository::ProductRepository;
 use crate::response;
 use crate::services::order_service::OrderService;
 
-/// Shared, cheaply clonable application state: handler -> service -> repository -> pool.
+/// Hand-written OpenAPI spec, compiled into the binary and served at /openapi.yaml.
+pub const OPENAPI_YAML: &str = include_str!("../openapi.yaml");
+
+/// Shared, cheaply clonable application state:
+/// handler -> service -> repository (OrderApiDb pool) + Product API client.
 #[derive(Clone)]
 pub struct AppState {
     pub orders: Arc<OrderService>,
@@ -29,8 +34,8 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(pool: DbPool, jwt: &JwtConfig) -> Self {
-        let service = OrderService::new(OrderRepository::new(pool.clone()), ProductRepository::new(pool));
+    pub fn new(pool: DbPool, jwt: &JwtConfig, products: ProductClient) -> Self {
+        let service = OrderService::new(OrderRepository::new(pool), products);
         Self { orders: Arc::new(service), jwt: Arc::new(JwtValidator::new(jwt)) }
     }
 }
@@ -44,6 +49,9 @@ pub fn build_router(state: AppState, cors_origins: &[String]) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        // API documentation: Swagger UI (bundled assets, no CDN) rendering /openapi.yaml
+        .route("/openapi.yaml", get(openapi_spec))
+        .merge(SwaggerUi::new("/docs").config(Config::from("/openapi.yaml")))
         .route("/api/orders", get(orders::list_orders).post(orders::create_order))
         .route(
             "/api/orders/{id}",
@@ -58,6 +66,10 @@ pub fn build_router(state: AppState, cors_origins: &[String]) -> Router {
 
 async fn health() -> Response {
     response::ok(StatusCode::OK, json!({ "status": "ok", "service": "order-service" }), "Service is healthy.")
+}
+
+async fn openapi_spec() -> impl IntoResponse {
+    ([(CONTENT_TYPE, "application/yaml")], OPENAPI_YAML)
 }
 
 async fn not_found() -> AppError {

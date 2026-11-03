@@ -8,8 +8,11 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Serilog;
 
-// Load .env into the environment. Real environment variables win over .env values.
-DotNetEnv.Env.NoClobber().Load();
+// Load .env files into the environment: this service's own .env (optional overrides) first,
+// then the shared ../.env used by every service. Earlier sources win, and real environment
+// variables win over both.
+DotNetEnv.Env.NoClobber().Load(".env");
+DotNetEnv.Env.NoClobber().Load(Path.Combine("..", ".env"));
 
 // Console-only logger until configuration is known.
 Log.Logger = new LoggerConfiguration().WriteTo.Console().CreateBootstrapLogger();
@@ -56,7 +59,7 @@ try
     await app.Services.GetRequiredService<ISqlConnectionFactory>().VerifyConnectivityAsync(CancellationToken.None);
 
     app.Lifetime.ApplicationStarted.Register(() =>
-        Log.Information("Auth service listening on http://localhost:{Port}", config.Port));
+        Log.Information("Auth service listening on http://localhost:{Port} (API docs: /docs)", config.Port));
     app.Lifetime.ApplicationStopping.Register(() =>
         Log.Information("Auth service shutting down..."));
     app.Lifetime.ApplicationStopped.Register(() =>
@@ -69,6 +72,17 @@ try
     app.UseMiddleware<RequestLoggingMiddleware>();     // outermost: sees the final status code
     app.UseMiddleware<ExceptionHandlingMiddleware>();
     app.UseStatusCodePages(StatusCodeResponseWriter.WriteAsync);
+
+    // ---- API documentation: hand-written OpenAPI spec + Swagger UI (assets bundled, no CDN)
+    var openApiPath = Path.Combine(AppContext.BaseDirectory, "openapi.yaml");
+    app.MapGet("/openapi.yaml", () => Results.File(openApiPath, "application/yaml"));
+    app.UseSwaggerUI(options =>
+    {
+        options.RoutePrefix = "docs";
+        options.SwaggerEndpoint("/openapi.yaml", "Auth Service API v1");
+        options.DocumentTitle = "Auth Service API";
+    });
+
     app.UseCors("client");
     app.UseAuthentication();
     app.UseAuthorization();

@@ -10,6 +10,7 @@ pub struct Config {
     pub port: u16,
     pub cors_origins: Vec<String>,
     pub db: DbConfig,
+    pub product_service: ProductServiceConfig,
     pub jwt: JwtConfig,
     pub log_level: String,
     pub log_dir: PathBuf,
@@ -25,6 +26,12 @@ pub struct DbConfig {
     pub pool_min: u32,
     pub pool_max: u32,
     pub connect_timeout_secs: u64,
+}
+
+/// The Product Service owns products (ProductApiDb); orders look products up through its API.
+pub struct ProductServiceConfig {
+    pub url: String,
+    pub timeout_ms: u64,
 }
 
 pub struct JwtConfig {
@@ -49,13 +56,17 @@ impl Config {
             db: DbConfig {
                 server: r.required("DB_SERVER", true),
                 port: r.number("DB_PORT", 1433u16, 1, 65535),
-                database: r.required("DB_NAME", true),
+                database: r.optional("DB_NAME", "OrderApiDb"), // this service's own database
                 user: r.required("DB_USER", true),
                 password: r.required("DB_PASSWORD", false),
                 trust_server_cert: r.boolean("DB_TRUST_SERVER_CERT", false),
                 pool_min: r.number("DB_POOL_MIN", 0u32, 0, 100),
                 pool_max: r.number("DB_POOL_MAX", 10u32, 1, 200),
                 connect_timeout_secs: r.number("DB_CONNECT_TIMEOUT_SECONDS", 15u64, 1, 120),
+            },
+            product_service: ProductServiceConfig {
+                url: r.service_url("PRODUCT_SERVICE_URL", "http://127.0.0.1:5002"),
+                timeout_ms: r.number("SERVICE_CALL_TIMEOUT_MS", 5000u64, 500, 60000),
             },
             jwt: JwtConfig {
                 secret: r.required("JWT_SECRET", false),
@@ -121,6 +132,15 @@ impl EnvReader {
                 default
             }
         }
+    }
+
+    fn service_url(&mut self, name: &str, default: &str) -> String {
+        let value = self.optional(name, default);
+        let lower = value.to_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://")) || value.len() < 10 {
+            self.errors.push(format!("{name} must be an absolute http(s) URL"));
+        }
+        value.trim_end_matches('/').to_owned()
     }
 
     fn boolean(&mut self, name: &str, default: bool) -> bool {

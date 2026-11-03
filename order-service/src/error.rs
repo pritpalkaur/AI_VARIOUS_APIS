@@ -18,6 +18,8 @@ pub mod codes {
     pub const METHOD_NOT_ALLOWED: &str = "METHOD_NOT_ALLOWED";
     pub const ORDER_NOT_FOUND: &str = "ORDER_NOT_FOUND";
     pub const PRODUCT_NOT_FOUND: &str = "PRODUCT_NOT_FOUND";
+    pub const PRODUCT_SERVICE_UNAVAILABLE: &str = "PRODUCT_SERVICE_UNAVAILABLE";
+    pub const SERVICE_UNAVAILABLE: &str = "SERVICE_UNAVAILABLE";
     pub const INTERNAL_ERROR: &str = "INTERNAL_ERROR";
 }
 
@@ -27,7 +29,7 @@ const GENERIC_ERROR: &str = "An unexpected error occurred.";
 pub enum DbErrorKind {
     // The constraint name is only read through Debug (logged), never matched on.
     UniqueViolation(#[allow(dead_code)] Option<String>),
-    ForeignKeyViolation(Option<String>),
+    ForeignKeyViolation(#[allow(dead_code)] Option<String>),
     Other,
 }
 
@@ -69,6 +71,10 @@ pub enum AppError {
     #[error("connection pool error: {0}")]
     Pool(String),
 
+    /// Another service we depend on (by display name, e.g. "Product") is down or misbehaving.
+    #[error("{0} service unavailable")]
+    ServiceUnavailable(&'static str),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -109,6 +115,15 @@ impl IntoResponse for AppError {
                 StatusCode::METHOD_NOT_ALLOWED,
                 codes::METHOD_NOT_ALLOWED,
                 "HTTP method not allowed for this resource.".into(),
+            ),
+            // Logged with context where it was created.
+            AppError::ServiceUnavailable(service) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                match *service {
+                    "Product" => codes::PRODUCT_SERVICE_UNAVAILABLE,
+                    _ => codes::SERVICE_UNAVAILABLE,
+                },
+                format!("The {service} service is unavailable. Please try again later."),
             ),
             // Already logged with context where they were created.
             AppError::Database { .. } | AppError::Pool(_) => {

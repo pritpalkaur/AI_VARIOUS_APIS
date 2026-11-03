@@ -12,7 +12,8 @@ use jsonwebtoken::{encode, EncodingKey, Header};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use crate::config::JwtConfig;
+use crate::clients::product_client::ProductClient;
+use crate::config::{JwtConfig, ProductServiceConfig};
 use crate::db::TiberiusManager;
 use crate::routes::{build_router, AppState};
 
@@ -27,7 +28,9 @@ fn app() -> Router {
         .build_unchecked(TiberiusManager::for_tests(config));
 
     let jwt = JwtConfig { secret: SECRET.into(), issuer: "auth-service".into(), audience: "app-clients".into() };
-    build_router(AppState::new(pool, &jwt), &["http://localhost:5173".to_owned()])
+    // Never contacted by these tests either: every case fails validation or auth first.
+    let products = ProductClient::new(&ProductServiceConfig { url: "http://127.0.0.1:1".into(), timeout_ms: 200 }).unwrap();
+    build_router(AppState::new(pool, &jwt, products), &["http://localhost:5173".to_owned()])
 }
 
 fn token(role: &str, exp_offset_secs: i64, audience: &str) -> String {
@@ -106,11 +109,14 @@ async fn bad_id_is_400() {
 
 #[tokio::test]
 async fn bad_list_query_is_400() {
-    let uri = "/api/orders?pageSize=500&sortBy=hack&status=Lost";
+    let uri = "/api/orders?pageSize=500&sortBy=hack&status=Lost&productId=abc";
     let (status, body) = call("GET", uri, Some(&token("Admin", 300, "app-clients")), None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let message = body["error"]["message"].as_str().unwrap();
-    assert!(message.contains("pageSize") && message.contains("sortBy") && message.contains("status"), "{message}");
+    assert!(
+        message.contains("pageSize") && message.contains("sortBy") && message.contains("status") && message.contains("productId"),
+        "{message}"
+    );
 }
 
 #[tokio::test]
@@ -147,6 +153,93 @@ async fn wrong_content_type_is_415() {
         call("POST", "/api/orders", Some(&token("User", 300, "app-clients")), Some(("text/plain", "{}"))).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert_eq!(error_code(&body), "UNSUPPORTED_MEDIA_TYPE");
+}
+
+#[tokio::test]
+async fn swagger_ui_and_spec_are_served() {
+    let res = app().oneshot(Request::get("/docs/").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    assert!(html.contains("swagger"), "Swagger UI page expected");
+
+    let res = app()
+        .oneshot(Request::get("/docs/swagger-initializer.js").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let js = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    assert!(js.contains("/openapi.yaml"), "Swagger UI must load /openapi.yaml: {js}");
+
+    let res = app().oneshot(Request::get("/openapi.yaml").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "application/yaml");
+}
+
+/// Structural checks for all three services' OpenAPI specs (the specs are hand-written, so
+/// this catches broken YAML, dangling $refs and missing operation fields).
+#[test]
+fn openapi_specs_are_consistent() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let specs = [
+        ("auth-service/openapi.yaml", vec![("post", "/api/auth/register"), ("post", "/api/auth/login"), ("get", "/api/auth/me")]),
+        (
+            "product-service/openapi.yaml",
+            vec![
+                ("get", "/api/products"), ("post", "/api/products"),
+                ("get", "/api/products/{id}"), ("put", "/api/products/{id}"), ("delete", "/api/products/{id}"),
+            ],
+        ),
+        (
+            "order-service/openapi.yaml",
+            vec![
+                ("get", "/api/orders"), ("post", "/api/orders"),
+                ("get", "/api/orders/{id}"), ("put", "/api/orders/{id}"), ("delete", "/api/orders/{id}"),
+            ],
+        ),
+    ];
+
+    for (file, expected_operations) in specs {
+        let text = std::fs::read_to_string(root.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        let doc: serde_yaml::Value = serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("{file}: invalid YAML: {e}"));
+        assert_eq!(doc["openapi"].as_str(), Some("3.0.3"), "{file}: openapi version");
+
+        let mut refs = Vec::new();
+        collect_refs(&doc, &mut refs);
+        assert!(!refs.is_empty(), "{file}: no $refs found");
+        for r in &refs {
+            assert!(resolve_ref(&doc, r).is_some(), "{file}: dangling $ref {r}");
+        }
+
+        for (method, path) in expected_operations.iter().copied().chain([("get", "/health")]) {
+            let op = &doc["paths"][path][method];
+            assert!(op.is_mapping(), "{file}: {method} {path} is not documented");
+            for field in ["operationId", "summary", "responses"] {
+                assert!(!op[field].is_null(), "{file}: {method} {path} has no {field}");
+            }
+        }
+    }
+}
+
+fn collect_refs(value: &serde_yaml::Value, out: &mut Vec<String>) {
+    match value {
+        serde_yaml::Value::Mapping(map) => {
+            for (k, v) in map {
+                if k.as_str() == Some("$ref") {
+                    out.push(v.as_str().unwrap_or_default().to_owned());
+                } else {
+                    collect_refs(v, out);
+                }
+            }
+        }
+        serde_yaml::Value::Sequence(items) => items.iter().for_each(|v| collect_refs(v, out)),
+        _ => {}
+    }
+}
+
+fn resolve_ref<'a>(doc: &'a serde_yaml::Value, reference: &str) -> Option<&'a serde_yaml::Value> {
+    reference
+        .strip_prefix("#/")?
+        .split('/')
+        .try_fold(doc, |node, key| node.get(key))
 }
 
 #[tokio::test]

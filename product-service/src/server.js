@@ -24,8 +24,10 @@ async function start() {
     return;
   }
 
-  server = createApp().listen(config.port, 'localhost', () => {
-    logger.info(`Product service listening on http://localhost:${config.port}`);
+  // Bind IPv4 loopback explicitly: 'localhost' resolves to ::1 first on Windows, and the
+  // gateway (like the order service) uses 127.0.0.1.
+  server = createApp().listen(config.port, '127.0.0.1', () => {
+    logger.info(`Product service listening on http://localhost:${config.port} (API docs: /docs)`);
   });
 
   server.on('error', async (err) => {

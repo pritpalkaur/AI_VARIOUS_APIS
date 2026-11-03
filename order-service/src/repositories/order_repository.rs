@@ -1,7 +1,9 @@
-//! Data access for dbo.Orders.
+//! Data access for OrderApiDb.dbo.Orders - this service's own database. Products and users
+//! live in other services' databases, so nothing here joins them: each order stores its own
+//! ProductName / Username / UnitPrice snapshot.
 //!  - Parameterized SQL only (@P1, @P2, ... bound by tiberius); statements are complete literals.
 //!  - `scope: Option<i32>`: None = any order (Admin), Some(user_id) = only that user's orders.
-//!    It is enforced in SQL with `(@Pn IS NULL OR o.UserId = @Pn)`.
+//!    It is enforced in SQL with `(@Pn IS NULL OR UserId = @Pn)`.
 //!  - Each method takes a pooled connection that returns to the pool when it goes out of scope.
 
 use chrono::{NaiveDateTime, TimeZone, Utc};
@@ -11,7 +13,7 @@ use tiberius::Row;
 use super::col;
 use crate::db::DbPool;
 use crate::error::{AppError, DbContext};
-use crate::models::order::{ListQuery, Order, OrderInput};
+use crate::models::order::{ListQuery, Order, OrderInput, ProductSnapshot};
 
 #[derive(Clone)]
 pub struct OrderRepository {
@@ -28,32 +30,31 @@ impl OrderRepository {
     pub async fn list(&self, scope: Option<i32>, q: &ListQuery) -> Result<(i32, Vec<Order>), AppError> {
         const SQL: &str = r#"
             SELECT COUNT(*) AS Total
-            FROM dbo.Orders o
-            WHERE (@P1 IS NULL OR o.UserId = @P1)
-              AND (@P2 IS NULL OR o.Status = @P2);
+            FROM dbo.Orders
+            WHERE (@P1 IS NULL OR UserId = @P1)
+              AND (@P2 IS NULL OR Status = @P2)
+              AND (@P7 IS NULL OR ProductId = @P7);
 
-            SELECT o.Id, o.ProductId, p.Name AS ProductName, o.UserId, u.Username,
-                   o.Quantity, o.UnitPrice, o.TotalPrice, o.Status, o.OrderDate,
-                   o.CreatedAt, o.UpdatedAt
-            FROM dbo.Orders o
-            JOIN dbo.Products p ON p.Id = o.ProductId
-            JOIN dbo.Users u    ON u.Id = o.UserId
-            WHERE (@P1 IS NULL OR o.UserId = @P1)
-              AND (@P2 IS NULL OR o.Status = @P2)
+            SELECT Id, ProductId, ProductName, UserId, Username, Quantity, UnitPrice, TotalPrice,
+                   Status, OrderDate, CreatedAt, UpdatedAt
+            FROM dbo.Orders
+            WHERE (@P1 IS NULL OR UserId = @P1)
+              AND (@P2 IS NULL OR Status = @P2)
+              AND (@P7 IS NULL OR ProductId = @P7)
             ORDER BY
-              CASE WHEN @P3 = 'id'         AND @P4 = 'asc'  THEN o.Id         END ASC,
-              CASE WHEN @P3 = 'id'         AND @P4 = 'desc' THEN o.Id         END DESC,
-              CASE WHEN @P3 = 'orderDate'  AND @P4 = 'asc'  THEN o.OrderDate  END ASC,
-              CASE WHEN @P3 = 'orderDate'  AND @P4 = 'desc' THEN o.OrderDate  END DESC,
-              CASE WHEN @P3 = 'quantity'   AND @P4 = 'asc'  THEN o.Quantity   END ASC,
-              CASE WHEN @P3 = 'quantity'   AND @P4 = 'desc' THEN o.Quantity   END DESC,
-              CASE WHEN @P3 = 'totalPrice' AND @P4 = 'asc'  THEN o.TotalPrice END ASC,
-              CASE WHEN @P3 = 'totalPrice' AND @P4 = 'desc' THEN o.TotalPrice END DESC,
-              CASE WHEN @P3 = 'status'     AND @P4 = 'asc'  THEN o.Status     END ASC,
-              CASE WHEN @P3 = 'status'     AND @P4 = 'desc' THEN o.Status     END DESC,
-              CASE WHEN @P3 = 'createdAt'  AND @P4 = 'asc'  THEN o.CreatedAt  END ASC,
-              CASE WHEN @P3 = 'createdAt'  AND @P4 = 'desc' THEN o.CreatedAt  END DESC,
-              o.Id ASC
+              CASE WHEN @P3 = 'id'         AND @P4 = 'asc'  THEN Id         END ASC,
+              CASE WHEN @P3 = 'id'         AND @P4 = 'desc' THEN Id         END DESC,
+              CASE WHEN @P3 = 'orderDate'  AND @P4 = 'asc'  THEN OrderDate  END ASC,
+              CASE WHEN @P3 = 'orderDate'  AND @P4 = 'desc' THEN OrderDate  END DESC,
+              CASE WHEN @P3 = 'quantity'   AND @P4 = 'asc'  THEN Quantity   END ASC,
+              CASE WHEN @P3 = 'quantity'   AND @P4 = 'desc' THEN Quantity   END DESC,
+              CASE WHEN @P3 = 'totalPrice' AND @P4 = 'asc'  THEN TotalPrice END ASC,
+              CASE WHEN @P3 = 'totalPrice' AND @P4 = 'desc' THEN TotalPrice END DESC,
+              CASE WHEN @P3 = 'status'     AND @P4 = 'asc'  THEN Status     END ASC,
+              CASE WHEN @P3 = 'status'     AND @P4 = 'desc' THEN Status     END DESC,
+              CASE WHEN @P3 = 'createdAt'  AND @P4 = 'asc'  THEN CreatedAt  END ASC,
+              CASE WHEN @P3 = 'createdAt'  AND @P4 = 'desc' THEN CreatedAt  END DESC,
+              Id ASC
             OFFSET @P5 ROWS FETCH NEXT @P6 ROWS ONLY;
         "#;
 
@@ -62,7 +63,7 @@ impl OrderRepository {
 
         let mut conn = self.pool.get().await?;
         let results = conn
-            .query(SQL, &[&scope, &q.status, &q.sort_by, &q.sort_dir, &offset, &page_size])
+            .query(SQL, &[&scope, &q.status, &q.sort_by, &q.sort_dir, &offset, &page_size, &q.product_id])
             .await
             .db_ctx("orders.list")?
             .into_results()
@@ -84,14 +85,11 @@ impl OrderRepository {
 
     pub async fn find_by_id(&self, id: i32, scope: Option<i32>) -> Result<Option<Order>, AppError> {
         const SQL: &str = r#"
-            SELECT o.Id, o.ProductId, p.Name AS ProductName, o.UserId, u.Username,
-                   o.Quantity, o.UnitPrice, o.TotalPrice, o.Status, o.OrderDate,
-                   o.CreatedAt, o.UpdatedAt
-            FROM dbo.Orders o
-            JOIN dbo.Products p ON p.Id = o.ProductId
-            JOIN dbo.Users u    ON u.Id = o.UserId
-            WHERE o.Id = @P1
-              AND (@P2 IS NULL OR o.UserId = @P2);
+            SELECT Id, ProductId, ProductName, UserId, Username, Quantity, UnitPrice, TotalPrice,
+                   Status, OrderDate, CreatedAt, UpdatedAt
+            FROM dbo.Orders
+            WHERE Id = @P1
+              AND (@P2 IS NULL OR UserId = @P2);
         "#;
 
         let mut conn = self.pool.get().await?;
@@ -107,18 +105,33 @@ impl OrderRepository {
     }
 
     /// Inserts an order and returns its new Id.
-    pub async fn insert(&self, user_id: i32, input: &OrderInput, unit_price: Decimal) -> Result<i32, AppError> {
+    pub async fn insert(
+        &self,
+        user_id: i32,
+        username: &str,
+        input: &OrderInput,
+        product: &ProductSnapshot,
+    ) -> Result<i32, AppError> {
         const SQL: &str = r#"
-            INSERT INTO dbo.Orders (ProductId, UserId, Quantity, UnitPrice, Status, OrderDate)
+            INSERT INTO dbo.Orders (ProductId, ProductName, UserId, Username, Quantity, UnitPrice, Status, OrderDate)
             OUTPUT INSERTED.Id
-            VALUES (@P1, @P2, @P3, @P4, @P5, @P6);
+            VALUES (@P1, @P2, @P3, @P4, @P5, @P6, @P7, @P8);
         "#;
 
         let mut conn = self.pool.get().await?;
         let row = conn
             .query(
                 SQL,
-                &[&input.product_id, &user_id, &input.quantity, &unit_price, &input.status, &input.order_date],
+                &[
+                    &input.product_id,
+                    &product.name.as_str(),
+                    &user_id,
+                    &username,
+                    &input.quantity,
+                    &product.unit_price,
+                    &input.status,
+                    &input.order_date,
+                ],
             )
             .await
             .db_ctx("orders.insert")?
@@ -136,12 +149,12 @@ impl OrderRepository {
         id: i32,
         scope: Option<i32>,
         input: &OrderInput,
-        unit_price: Decimal,
+        product: &ProductSnapshot,
     ) -> Result<bool, AppError> {
         const SQL: &str = r#"
             UPDATE dbo.Orders
-            SET ProductId = @P3, Quantity = @P4, UnitPrice = @P5, Status = @P6, OrderDate = @P7,
-                UpdatedAt = SYSUTCDATETIME()
+            SET ProductId = @P3, ProductName = @P4, Quantity = @P5, UnitPrice = @P6, Status = @P7,
+                OrderDate = @P8, UpdatedAt = SYSUTCDATETIME()
             WHERE Id = @P1
               AND (@P2 IS NULL OR UserId = @P2);
         "#;
@@ -150,7 +163,16 @@ impl OrderRepository {
         let result = conn
             .execute(
                 SQL,
-                &[&id, &scope, &input.product_id, &input.quantity, &unit_price, &input.status, &input.order_date],
+                &[
+                    &id,
+                    &scope,
+                    &input.product_id,
+                    &product.name.as_str(),
+                    &input.quantity,
+                    &product.unit_price,
+                    &input.status,
+                    &input.order_date,
+                ],
             )
             .await
             .db_ctx("orders.update")?;

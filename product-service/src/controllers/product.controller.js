@@ -77,7 +77,8 @@ export async function deleteProduct(req, res, next) {
   try {
     const id = validateId(req.params.id);
     assertValid(id);
-    const result = await productService.deleteProduct(id.value, req.user);
+    // The caller's token is forwarded to the Order Service for the "has orders?" check.
+    const result = await productService.deleteProduct(id.value, req.user, req.get('authorization'));
     sendSuccess(res, 200, result, 'Product deleted.');
   } catch (err) {
     next(err);

@@ -6,12 +6,11 @@ import logger from '../utils/logger.js';
  * One connection pool for the whole process: created once in server.js at startup,
  * closed once on graceful shutdown.
  *
- * How connections are released with `mssql`:
- *  - pool.request().query(...) checks out a connection for that single query and returns
- *    it to the pool when the query settles - on success, on error and on cancel.
- *  - A Transaction holds one connection from begin() until commit() or rollback();
- *    repositories call rollback() in `finally` if the transaction was not committed,
- *    which hands the connection back.
+ * How connections are released with `mssql`: pool.request().query(...) checks out a
+ * connection for that single query and returns it to the pool when the query settles -
+ * on success, on error and on cancel. (If a future repository needs a Transaction, it holds
+ * one connection from begin() until commit()/rollback(); roll back in `finally` when not
+ * committed so the connection is always handed back.)
  */
 let pool = null;
 

@@ -30,6 +30,12 @@ export class AppError extends Error {
     return new AppError(409, code, message);
   }
 
+  /** Another service we depend on could not be reached or answered unexpectedly. */
+  static serviceUnavailable(serviceName) {
+    return new AppError(503, `${serviceName.toUpperCase()}_SERVICE_UNAVAILABLE`,
+      `The ${serviceName} service is unavailable. Please try again later.`);
+  }
+
   static internal() {
     return new AppError(500, ErrorCodes.INTERNAL_ERROR, 'An unexpected error occurred.');
   }
@@ -59,5 +65,6 @@ export const ErrorCodes = Object.freeze({
   PRODUCT_NOT_FOUND: 'PRODUCT_NOT_FOUND',
   PRODUCT_NAME_TAKEN: 'PRODUCT_NAME_TAKEN',
   PRODUCT_HAS_ORDERS: 'PRODUCT_HAS_ORDERS',
+  ORDER_SERVICE_UNAVAILABLE: 'ORDER_SERVICE_UNAVAILABLE',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 });

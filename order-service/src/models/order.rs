@@ -2,7 +2,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
-/// An order as returned by the API (joined with product name and username).
+/// An order as returned by the API. productName and username are snapshots stored on the order.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Order {
@@ -32,11 +32,19 @@ pub struct OrderInput {
     pub order_date: NaiveDateTime,
 }
 
-/// The product fields the order service needs (id and current price).
+/// The product fields the order service needs, as returned by the Product API.
 #[derive(Debug, Clone)]
 pub struct ProductRef {
-    pub id: i32,
+    pub name: String,
     pub price: Decimal,
+}
+
+/// What an order stores about its product: copied when the order is created or switched
+/// to another product, so the order stays readable even if the product changes later.
+#[derive(Debug, Clone)]
+pub struct ProductSnapshot {
+    pub name: String,
+    pub unit_price: Decimal,
 }
 
 /// Validated list query. sort_by/sort_dir are whitelisted values, passed as SQL parameters.
@@ -47,6 +55,8 @@ pub struct ListQuery {
     pub sort_by: &'static str,
     pub sort_dir: &'static str,
     pub status: Option<&'static str>,
+    /// ?productId= - used by the Product Service's "does this product have orders?" check.
+    pub product_id: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]

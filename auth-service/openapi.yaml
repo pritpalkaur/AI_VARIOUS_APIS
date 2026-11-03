@@ -1,0 +1,312 @@
+openapi: 3.0.3
+info:
+  title: Auth Service API
+  version: 1.0.0
+  description: |
+    Registers users and issues **JWT access tokens** used by the Product and Order services.
+
+    **Try it out:** call `POST /api/auth/login`, copy `data.accessToken`, click **Authorize**
+    and paste the token (without the `Bearer ` prefix).
+
+    Every response uses the shared envelope:
+    - success: `{ "success": true, "data": ..., "message": "..." }`
+    - error: `{ "success": false, "error": { "code": "...", "message": "..." } }`
+
+    Tokens are HS256-signed and contain the claims `sub` (user id), `username`, `role`
+    (`Admin` | `User`), `jti`, `iat`, `nbf`, `exp`, `iss` and `aud`.
+servers:
+  - url: /
+    description: Same host that served this page - the API gateway at http://localhost:5000/docs, or the Auth Service itself at http://localhost:5001/docs
+tags:
+  - name: Auth
+    description: Registration, login and the current user
+  - name: Health
+    description: Liveness check
+
+paths:
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      description: Creates a user with role `User`. Promote to `Admin` with SQL (see README).
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+              example:
+                success: true
+                data: { id: 1, username: alice, email: alice@example.com, role: User, createdAt: '2026-11-03T14:30:00.123Z' }
+                message: User registered successfully.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Username or email already in use
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                usernameTaken:
+                  summary: Username taken
+                  value: { success: false, error: { code: USERNAME_TAKEN, message: Username is already taken. } }
+                emailTaken:
+                  summary: Email taken
+                  value: { success: false, error: { code: EMAIL_TAKEN, message: Email is already registered. } }
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in and get an access token
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResultResponse'
+              example:
+                success: true
+                data:
+                  accessToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                  tokenType: Bearer
+                  expiresIn: 3600
+                  expiresAt: '2026-11-03T15:30:00Z'
+                  user: { id: 1, username: alice, email: alice@example.com, role: Admin, createdAt: '2026-11-03T14:30:00.123Z' }
+                message: Login successful.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Wrong username or password (the message never says which)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example: { success: false, error: { code: INVALID_CREDENTIALS, message: Invalid username or password. } }
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get the current user
+      description: Returns the user identified by the bearer token.
+      operationId: getCurrentUser
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+              example:
+                success: true
+                data: { id: 1, username: alice, email: alice@example.com, role: Admin, createdAt: '2026-11-03T14:30:00.123Z' }
+                message: Current user retrieved.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: The token is valid but the user was deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example: { success: false, error: { code: USER_NOT_FOUND, message: User no longer exists. } }
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      operationId: health
+      responses:
+        '200':
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example: { success: true, data: { status: ok, service: auth-service }, message: Service is healthy. }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [username, email, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+          pattern: '^[A-Za-z0-9_.-]+$'
+          description: Letters, digits, `_`, `.` and `-`. Unique (case-insensitive). Leading/trailing spaces are trimmed.
+          example: alice
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: Unique. Stored in lower case.
+          example: alice@example.com
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          description: 8 characters to 72 **bytes** (BCrypt limit); at least one letter and one digit.
+          example: Secret123
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          maxLength: 50
+          example: alice
+        password:
+          type: string
+          format: password
+          example: Secret123
+
+    User:
+      type: object
+      required: [id, username, email, role, createdAt]
+      properties:
+        id: { type: integer, format: int32, example: 1 }
+        username: { type: string, example: alice }
+        email: { type: string, format: email, example: alice@example.com }
+        role: { type: string, enum: [Admin, User], example: User }
+        createdAt: { type: string, format: date-time, description: UTC, example: '2026-11-03T14:30:00.123Z' }
+
+    AuthResult:
+      type: object
+      required: [accessToken, tokenType, expiresIn, expiresAt, user]
+      properties:
+        accessToken: { type: string, description: 'JWT to send as `Authorization: Bearer <token>`' }
+        tokenType: { type: string, enum: [Bearer] }
+        expiresIn: { type: integer, description: Lifetime in seconds, example: 3600 }
+        expiresAt: { type: string, format: date-time, description: UTC expiry time }
+        user: { $ref: '#/components/schemas/User' }
+
+    HealthStatus:
+      type: object
+      required: [status, service]
+      properties:
+        status: { type: string, example: ok }
+        service: { type: string, example: auth-service }
+
+    UserResponse:
+      type: object
+      required: [success, data, message]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: { $ref: '#/components/schemas/User' }
+        message: { type: string }
+
+    AuthResultResponse:
+      type: object
+      required: [success, data, message]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: { $ref: '#/components/schemas/AuthResult' }
+        message: { type: string }
+
+    HealthResponse:
+      type: object
+      required: [success, data, message]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: { $ref: '#/components/schemas/HealthStatus' }
+        message: { type: string }
+
+    ErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, enum: [false] }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+              enum: [VALIDATION_ERROR, INVALID_JSON, BAD_REQUEST, INVALID_CREDENTIALS, UNAUTHORIZED, FORBIDDEN,
+                     NOT_FOUND, USER_NOT_FOUND, METHOD_NOT_ALLOWED, UNSUPPORTED_MEDIA_TYPE, USERNAME_TAKEN,
+                     EMAIL_TAKEN, CONFLICT, INTERNAL_ERROR]
+            message:
+              type: string
+              description: Human-readable, safe to show to users
+
+  responses:
+    BadRequest:
+      description: Invalid input. All validation problems are listed in one message.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            validation:
+              summary: Field validation failed
+              value: { success: false, error: { code: VALIDATION_ERROR, message: username must be between 3 and 50 characters. password must contain at least one letter and one digit. } }
+            invalidJson:
+              summary: Body is not valid JSON
+              value: { success: false, error: { code: INVALID_JSON, message: Request body is missing or is not valid JSON. } }
+    Unauthorized:
+      description: Missing, invalid or expired access token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missing:
+              summary: Missing or invalid token
+              value: { success: false, error: { code: UNAUTHORIZED, message: Missing or invalid access token. } }
+            expired:
+              summary: Expired token
+              value: { success: false, error: { code: UNAUTHORIZED, message: Access token has expired. } }
+    UnsupportedMediaType:
+      description: Content-Type is not application/json
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: UNSUPPORTED_MEDIA_TYPE, message: Content-Type must be application/json. } }
+    InternalError:
+      description: Unexpected server error. Details are logged, never returned.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: INTERNAL_ERROR, message: An unexpected error occurred. } }

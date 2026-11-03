@@ -85,7 +85,7 @@ public sealed class EnvConfig
 
             DbServer = Required("DB_SERVER"),
             DbPort = Int("DB_PORT", 1433, 1, 65535),
-            DbName = Required("DB_NAME"),
+            DbName = Optional("DB_NAME", "AuthDb"), // this service's own database
             DbUser = Required("DB_USER"),
             DbPassword = Required("DB_PASSWORD", trim: false),
             DbTrustServerCert = Bool("DB_TRUST_SERVER_CERT", false),

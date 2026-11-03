@@ -1,0 +1,448 @@
+openapi: 3.0.3
+info:
+  title: Order Service API
+  version: 1.0.0
+  description: |
+    CRUD API for orders. **Every endpoint requires a JWT** issued by the Auth Service
+    (`POST /api/auth/login` - through the gateway: `http://localhost:5000/api/auth/login`).
+
+    **Who sees what:** a `User` sees and manages only their own orders - another user's order
+    returns **404**, exactly like a missing one. An `Admin` sees and manages all orders.
+
+    **Own database:** orders live in `OrderApiDb`. Products are looked up through the Product API
+    (forwarding your token) when an order is created or switched to a different product, and
+    the product's **name and price are copied onto the order** (a snapshot) - so renaming or
+    repricing a product later never changes existing orders. `username` is copied from your
+    token. `totalPrice` (= quantity x unitPrice) is computed by the database. If the Product
+    Service is down, create/update answer **503** `PRODUCT_SERVICE_UNAVAILABLE`.
+
+    **Try it out:** click **Authorize** and paste the `accessToken` (without `Bearer `).
+
+    Every response uses the shared envelope:
+    - success: `{ "success": true, "data": ..., "message": "..." }`
+    - error: `{ "success": false, "error": { "code": "...", "message": "..." } }`
+servers:
+  - url: /
+    description: Same host that served this page - the API gateway at http://localhost:5000/docs, or the Order Service itself at http://localhost:5003/docs
+security:
+  - bearerAuth: []
+tags:
+  - name: Orders
+  - name: Health
+
+paths:
+  /api/orders:
+    get:
+      tags: [Orders]
+      summary: List orders
+      description: Own orders for a `User`, all orders for an `Admin`. Paged, sortable, filterable by status.
+      operationId: listOrders
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: sortBy
+          in: query
+          schema: { type: string, enum: [id, orderDate, quantity, totalPrice, status, createdAt], default: orderDate }
+        - name: sortDir
+          in: query
+          schema: { type: string, enum: [asc, desc], default: desc }
+        - name: status
+          in: query
+          description: Only orders with this status (case-insensitive).
+          schema: { $ref: '#/components/schemas/OrderStatus' }
+        - name: productId
+          in: query
+          description: Only orders for this product. The Product Service uses this (as an Admin) to check for orders before deleting a product.
+          schema: { type: integer, format: int32, minimum: 1 }
+      responses:
+        '200':
+          description: One page of orders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderPageResponse'
+              example:
+                success: true
+                data:
+                  items:
+                    - { id: 1, productId: 1, productName: Wireless Mouse, userId: 2, username: bob, quantity: 2, unitPrice: 24.99, totalPrice: 49.98, status: Pending, orderDate: '2026-11-03T14:30:00Z', createdAt: '2026-11-03T14:30:00.123Z', updatedAt: '2026-11-03T14:30:00.123Z' }
+                  pagination: { page: 1, pageSize: 20, totalItems: 1, totalPages: 1 }
+                message: Orders retrieved.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [Orders]
+      summary: Create an order
+      description: The order belongs to the caller. `status` defaults to `Pending`, `orderDate` to now.
+      operationId: createOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderCreate'
+            examples:
+              minimal:
+                summary: Only the required fields
+                value: { productId: 1, quantity: 2 }
+              full:
+                summary: Every field
+                value: { productId: 1, quantity: 1, status: Confirmed, orderDate: '2026-11-03T14:30:00Z' }
+      responses:
+        '201':
+          description: Order created
+          headers:
+            Location:
+              description: URL of the new order
+              schema: { type: string, example: /api/orders/1 }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+              example:
+                success: true
+                data: { id: 1, productId: 1, productName: Wireless Mouse, userId: 2, username: bob, quantity: 2, unitPrice: 24.99, totalPrice: 49.98, status: Pending, orderDate: '2026-11-03T14:30:00.123Z', createdAt: '2026-11-03T14:30:00.123Z', updatedAt: '2026-11-03T14:30:00.123Z' }
+                message: Order created.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProductNotFound'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ProductServiceUnavailable'
+
+  /api/orders/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int32, minimum: 1 }
+        example: 1
+    get:
+      tags: [Orders]
+      summary: Get an order
+      operationId: getOrder
+      responses:
+        '200':
+          description: The order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+              example:
+                success: true
+                data: { id: 1, productId: 1, productName: Wireless Mouse, userId: 2, username: bob, quantity: 2, unitPrice: 24.99, totalPrice: 49.98, status: Pending, orderDate: '2026-11-03T14:30:00Z', createdAt: '2026-11-03T14:30:00.123Z', updatedAt: '2026-11-03T14:30:00.123Z' }
+                message: Order retrieved.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/OrderNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [Orders]
+      summary: Replace an order
+      description: Full replace - every field is required.
+      operationId: updateOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderReplace'
+            example: { productId: 1, quantity: 3, status: Shipped, orderDate: '2026-11-03' }
+      responses:
+        '200':
+          description: Order updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+              example:
+                success: true
+                data: { id: 1, productId: 1, productName: Wireless Mouse, userId: 2, username: bob, quantity: 3, unitPrice: 24.99, totalPrice: 74.97, status: Shipped, orderDate: '2026-11-03T00:00:00Z', createdAt: '2026-11-03T14:30:00.123Z', updatedAt: '2026-11-03T15:10:42.007Z' }
+                message: Order updated.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Order not found (or owned by someone else), or the new product does not exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                order:
+                  summary: Order not found
+                  value: { success: false, error: { code: ORDER_NOT_FOUND, message: Order 42 was not found. } }
+                product:
+                  summary: Product not found
+                  value: { success: false, error: { code: PRODUCT_NOT_FOUND, message: Product 99 was not found. } }
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ProductServiceUnavailable'
+    delete:
+      tags: [Orders]
+      summary: Delete an order
+      operationId: deleteOrder
+      responses:
+        '200':
+          description: Order deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+              example: { success: true, data: { id: 2 }, message: Order deleted. }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/OrderNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      operationId: health
+      security: []
+      responses:
+        '200':
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example: { success: true, data: { status: ok, service: order-service }, message: Service is healthy. }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token from `POST /api/auth/login` (gateway port 5000, or the Auth Service on 5001).
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100000, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  schemas:
+    OrderStatus:
+      type: string
+      enum: [Pending, Confirmed, Shipped, Delivered, Cancelled]
+
+    OrderDate:
+      type: string
+      description: |
+        ISO-8601. Either a date-time with an offset (`2026-11-03T14:30:00Z`, `2026-11-03T20:00:00+05:30`
+        - converted to UTC) or a plain date (`2026-11-03` = midnight UTC). Years 2000-2100.
+        Stored with millisecond precision.
+      example: '2026-11-03T14:30:00Z'
+
+    Order:
+      type: object
+      required: [id, productId, productName, userId, username, quantity, unitPrice, totalPrice, status, orderDate, createdAt, updatedAt]
+      properties:
+        id: { type: integer, format: int32, example: 1 }
+        productId: { type: integer, format: int32, example: 1 }
+        productName: { type: string, description: Product name copied when the order was created or switched product, example: Wireless Mouse }
+        userId: { type: integer, format: int32, example: 2 }
+        username: { type: string, description: Copied from the creator's token, example: bob }
+        quantity: { type: integer, format: int32, example: 2 }
+        unitPrice: { type: number, format: double, description: Product price when the order was placed, example: 24.99 }
+        totalPrice: { type: number, format: double, description: quantity x unitPrice, example: 49.98 }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        orderDate: { type: string, format: date-time, description: UTC }
+        createdAt: { type: string, format: date-time, description: UTC }
+        updatedAt: { type: string, format: date-time, description: UTC }
+
+    OrderCreate:
+      type: object
+      required: [productId, quantity]
+      properties:
+        productId: { type: integer, format: int32, minimum: 1, description: Must reference an existing product, example: 1 }
+        quantity: { type: integer, format: int32, minimum: 1, maximum: 10000, example: 2 }
+        status:
+          allOf:
+            - $ref: '#/components/schemas/OrderStatus'
+          default: Pending
+        orderDate:
+          allOf:
+            - $ref: '#/components/schemas/OrderDate'
+          description: Defaults to the current time.
+
+    OrderReplace:
+      type: object
+      required: [productId, quantity, status, orderDate]
+      properties:
+        productId: { type: integer, format: int32, minimum: 1, example: 1 }
+        quantity: { type: integer, format: int32, minimum: 1, maximum: 10000, example: 3 }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        orderDate: { $ref: '#/components/schemas/OrderDate' }
+
+    Pagination:
+      type: object
+      required: [page, pageSize, totalItems, totalPages]
+      properties:
+        page: { type: integer, example: 1 }
+        pageSize: { type: integer, example: 20 }
+        totalItems: { type: integer, example: 42 }
+        totalPages: { type: integer, example: 3 }
+
+    OrderPage:
+      type: object
+      required: [items, pagination]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Order' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    HealthStatus:
+      type: object
+      required: [status, service]
+      properties:
+        status: { type: string, example: ok }
+        service: { type: string, example: order-service }
+
+    OrderResponse:
+      type: object
+      required: [success, data, message]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: { $ref: '#/components/schemas/Order' }
+        message: { type: string }
+
+    OrderPageResponse:
+      type: object
+      required: [success, data, message]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: { $ref: '#/components/schemas/OrderPage' }
+        message: { type: string }
+
+    DeletedResponse:
+      type: object
+      required: [success, data, message]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data:
+          type: object
+          required: [id]
+          properties:
+            id: { type: integer, format: int32 }
+        message: { type: string }
+
+    HealthResponse:
+      type: object
+      required: [success, data, message]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: { $ref: '#/components/schemas/HealthStatus' }
+        message: { type: string }
+
+    ErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, enum: [false] }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [VALIDATION_ERROR, INVALID_JSON, UNSUPPORTED_MEDIA_TYPE, UNAUTHORIZED, FORBIDDEN, NOT_FOUND,
+                     METHOD_NOT_ALLOWED, ORDER_NOT_FOUND, PRODUCT_NOT_FOUND, PRODUCT_SERVICE_UNAVAILABLE, INTERNAL_ERROR]
+            message:
+              type: string
+
+  responses:
+    BadRequest:
+      description: Invalid input (path, query or body). All problems are listed in one message.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            validation:
+              summary: Field validation failed
+              value: { success: false, error: { code: VALIDATION_ERROR, message: productId must be between 1 and 2147483647. quantity must be an integer. } }
+            missingFields:
+              summary: PUT without every field
+              value: { success: false, error: { code: VALIDATION_ERROR, message: status is required. orderDate is required. } }
+            invalidJson:
+              summary: Malformed JSON
+              value: { success: false, error: { code: INVALID_JSON, message: Request body is missing or is not valid JSON. } }
+    Unauthorized:
+      description: Missing, invalid or expired access token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missing:
+              summary: Missing or invalid token
+              value: { success: false, error: { code: UNAUTHORIZED, message: Missing or invalid access token. } }
+            expired:
+              summary: Expired token
+              value: { success: false, error: { code: UNAUTHORIZED, message: Access token has expired. } }
+    OrderNotFound:
+      description: No such order, or it belongs to another user
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: ORDER_NOT_FOUND, message: Order 42 was not found. } }
+    ProductNotFound:
+      description: The referenced product does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: PRODUCT_NOT_FOUND, message: Product 99 was not found. } }
+    ProductServiceUnavailable:
+      description: The Product Service (needed to look up the product's price and name) is down or timed out
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: PRODUCT_SERVICE_UNAVAILABLE, message: The Product service is unavailable. Please try again later. } }
+    UnsupportedMediaType:
+      description: Content-Type is not application/json
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: UNSUPPORTED_MEDIA_TYPE, message: Content-Type must be application/json. } }
+    InternalError:
+      description: Unexpected server error. Details are logged, never returned.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: INTERNAL_ERROR, message: An unexpected error occurred. } }

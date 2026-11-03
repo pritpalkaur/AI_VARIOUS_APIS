@@ -4,8 +4,10 @@ import dotenv from 'dotenv';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-// Real environment variables win over .env values (dotenv does not override by default).
-dotenv.config({ path: path.join(projectRoot, '.env'), quiet: true });
+// This service's own .env (optional overrides) first, then the shared ../.env used by every
+// service. The first file to set a value wins, and real environment variables win over both
+// (dotenv does not override by default).
+dotenv.config({ path: [path.join(projectRoot, '.env'), path.join(projectRoot, '..', '.env')], quiet: true });
 
 const errors = [];
 
@@ -34,6 +36,17 @@ function int(name, defaultValue, min, max) {
   return value;
 }
 
+function serviceUrl(name, defaultValue) {
+  const value = optional(name, defaultValue);
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('bad protocol');
+  } catch {
+    errors.push(`${name} must be an absolute http(s) URL`);
+  }
+  return value.replace(/\/+$/, '');
+}
+
 function bool(name, defaultValue) {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === '') return defaultValue;
@@ -55,7 +68,7 @@ const config = {
   db: {
     server: required('DB_SERVER'),
     port: int('DB_PORT', 1433, 1, 65535),
-    database: required('DB_NAME'),
+    database: optional('DB_NAME', 'ProductApiDb'), // this service's own database
     user: required('DB_USER'),
     password: required('DB_PASSWORD', { trim: false }),
     trustServerCertificate: bool('DB_TRUST_SERVER_CERT', false),
@@ -63,6 +76,12 @@ const config = {
     poolMax: int('DB_POOL_MAX', 10, 1, 200),
     connectTimeoutMs: int('DB_CONNECT_TIMEOUT_MS', 15000, 1000, 120000),
     requestTimeoutMs: int('DB_REQUEST_TIMEOUT_MS', 15000, 1000, 300000),
+  },
+
+  // The Order Service owns orders (OrderApiDb); we ask it before deleting a product.
+  orderService: {
+    url: serviceUrl('ORDER_SERVICE_URL', 'http://127.0.0.1:5003'),
+    timeoutMs: int('SERVICE_CALL_TIMEOUT_MS', 5000, 500, 60000),
   },
 
   jwt: {

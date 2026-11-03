@@ -21,12 +21,24 @@ pub enum Role {
     User,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AuthUser {
     pub id: i32,
-    #[allow(dead_code)]
     pub username: String,
     pub role: Role,
+    /// The caller's raw JWT, forwarded to the Product API. Never logged (see Debug below).
+    pub token: String,
+}
+
+impl std::fmt::Debug for AuthUser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthUser")
+            .field("id", &self.id)
+            .field("username", &self.username)
+            .field("role", &self.role)
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 impl AuthUser {
@@ -85,7 +97,7 @@ impl JwtValidator {
             _ => return Err(AppError::Unauthorized(INVALID_TOKEN)),
         };
 
-        Ok(AuthUser { id, username: claims.username.unwrap_or_default(), role })
+        Ok(AuthUser { id, username: claims.username.unwrap_or_default(), role, token: token.to_owned() })
     }
 }
 

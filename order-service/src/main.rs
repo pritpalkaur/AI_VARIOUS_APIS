@@ -1,4 +1,5 @@
 mod auth;
+mod clients;
 mod config;
 mod db;
 mod error;
@@ -23,8 +24,11 @@ use crate::config::Config;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // Load .env into the environment; real environment variables take precedence.
-    let _ = dotenvy::dotenv();
+    // This service's own .env (optional overrides) first, then the shared ../.env used by every
+    // service. dotenvy never overrides a variable that is already set, so earlier sources win
+    // and real environment variables win over both.
+    let _ = dotenvy::from_path(".env");
+    let _ = dotenvy::from_path("../.env");
 
     let config = match Config::from_env() {
         Ok(config) => config,
@@ -53,7 +57,16 @@ async fn main() -> ExitCode {
         }
     };
 
-    let state = routes::AppState::new(pool.clone(), &config.jwt);
+    let products = match clients::product_client::ProductClient::new(&config.product_service) {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::error!(error = %e, "Order service failed to start");
+            return ExitCode::FAILURE;
+        }
+    };
+    tracing::info!(url = %config.product_service.url, "Product API client ready");
+
+    let state = routes::AppState::new(pool.clone(), &config.jwt, products);
     let app = routes::build_router(state, &config.cors_origins);
 
     let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, config.port)).await {
@@ -63,7 +76,7 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    tracing::info!("Order service listening on http://localhost:{}", config.port);
+    tracing::info!("Order service listening on http://localhost:{} (API docs: /docs)", config.port);
 
     let served = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await;
 

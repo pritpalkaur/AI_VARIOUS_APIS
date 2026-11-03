@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import * as productRepository from '../repositories/product.repository.js';
+import { countOrdersForProduct } from '../clients/order.client.js';
 import logger from '../utils/logger.js';
 import { AppError, DataAccessError, ErrorCodes } from '../utils/AppError.js';
 
@@ -15,9 +16,6 @@ function toAppError(err, operation) {
   if (err instanceof DataAccessError) {
     if (err.kind === 'UNIQUE_VIOLATION' && err.constraint === 'UQ_Products_Name') {
       return AppError.conflict(ErrorCodes.PRODUCT_NAME_TAKEN, 'A product with this name already exists.');
-    }
-    if (err.kind === 'FOREIGN_KEY_VIOLATION') {
-      return AppError.conflict(ErrorCodes.PRODUCT_HAS_ORDERS, 'Product cannot be deleted because it has orders.');
     }
     return AppError.internal(); // already logged by the repository
   }
@@ -89,16 +87,26 @@ export async function updateProduct(id, input, user) {
   }
 }
 
-export async function deleteProduct(id, user) {
+/**
+ * Deletes a product unless orders reference it. Orders live in the Order Service's own
+ * database, so the check is an API call that forwards the caller's (Admin) token. If the
+ * Order Service is unreachable the delete is refused with 503 rather than done unchecked.
+ * An order placed in the instant between the check and the DELETE keeps its own snapshot of
+ * the product's name and price, so it stays fully readable.
+ */
+export async function deleteProduct(id, user, authorization) {
   const startedAt = performance.now();
   try {
-    const outcome = await productRepository.remove(id);
-    if (outcome === 'NOT_FOUND') {
-      throw AppError.notFound(ErrorCodes.PRODUCT_NOT_FOUND, `Product ${id} was not found.`);
-    }
-    if (outcome === 'HAS_ORDERS') {
+    const product = await productRepository.findById(id);
+    if (!product) throw AppError.notFound(ErrorCodes.PRODUCT_NOT_FOUND, `Product ${id} was not found.`);
+
+    const orderCount = await countOrdersForProduct(id, authorization);
+    if (orderCount > 0) {
       throw AppError.conflict(ErrorCodes.PRODUCT_HAS_ORDERS, 'Product cannot be deleted because it has orders.');
     }
+
+    const deleted = await productRepository.remove(id);
+    if (!deleted) throw AppError.notFound(ErrorCodes.PRODUCT_NOT_FOUND, `Product ${id} was not found.`);
     logger.info('Product deleted', { productId: id, userId: user.id });
     return { id };
   } catch (err) {

@@ -10,6 +10,8 @@ logs/
 # C# / .NET
 auth-service/bin/
 auth-service/obj/
+api-gateway/bin/
+api-gateway/obj/
 *.user
 .vs/
 

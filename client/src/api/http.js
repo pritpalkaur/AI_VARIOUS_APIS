@@ -1,18 +1,13 @@
 /*
  * Small fetch wrapper shared by every API module:
+ *  - sends every request to the API gateway, which routes it to the right service,
  *  - adds "Authorization: Bearer <token>" when a token is stored,
  *  - unwraps the shared envelope { success, data, message } / { success, error },
  *  - throws ApiError for HTTP errors and network failures,
  *  - on 401 for an authenticated call, notifies AuthContext so it can log out.
  */
 
-export const SERVICE_URLS = {
-  auth: import.meta.env.VITE_AUTH_URL ?? 'http://localhost:5001',
-  product: import.meta.env.VITE_PRODUCT_URL ?? 'http://localhost:5002',
-  order: import.meta.env.VITE_ORDER_URL ?? 'http://localhost:5003',
-};
-
-const SERVICE_NAMES = { auth: 'Auth', product: 'Product', order: 'Order' };
+export const API_GATEWAY_URL = import.meta.env.VITE_API_GATEWAY_URL ?? 'http://localhost:5000';
 
 export class ApiError extends Error {
   constructor(status, code, message) {
@@ -33,12 +28,11 @@ export function configureHttp({ tokenProvider, unauthorizedHandler }) {
 }
 
 /**
- * @param {'auth'|'product'|'order'} service
- * @param {string} path e.g. '/api/products'
+ * @param {string} path e.g. '/api/products' - the gateway routes /api/auth, /api/products, /api/orders
  * @param {{ method?: string, body?: unknown, query?: Record<string, unknown>, signal?: AbortSignal }} options
  */
-export async function request(service, path, { method = 'GET', body, query, signal } = {}) {
-  const url = new URL(path, SERVICE_URLS[service]);
+export async function request(path, { method = 'GET', body, query, signal } = {}) {
+  const url = new URL(path, API_GATEWAY_URL);
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   }
@@ -58,7 +52,7 @@ export async function request(service, path, { method = 'GET', body, query, sign
     });
   } catch (err) {
     if (err.name === 'AbortError') throw err;
-    throw new ApiError(0, 'NETWORK_ERROR', `Cannot reach the ${SERVICE_NAMES[service]} service. Is it running?`);
+    throw new ApiError(0, 'NETWORK_ERROR', 'Cannot reach the API gateway. Is it running on port 5000?');
   }
 
   let payload = null;

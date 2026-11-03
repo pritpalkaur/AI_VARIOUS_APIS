@@ -1,0 +1,435 @@
+openapi: 3.0.3
+info:
+  title: Product Service API
+  version: 1.0.0
+  description: |
+    CRUD API for products. **Every endpoint requires a JWT** issued by the Auth Service
+    (`POST /api/auth/login` - through the gateway: `http://localhost:5000/api/auth/login`). Reading is open to any logged-in user;
+    creating, updating and deleting require the **Admin** role.
+
+    **Try it out:** click **Authorize** and paste the `accessToken` (without `Bearer `).
+
+    Every response uses the shared envelope:
+    - success: `{ "success": true, "data": ..., "message": "..." }`
+    - error: `{ "success": false, "error": { "code": "...", "message": "..." } }`
+servers:
+  - url: /
+    description: Same host that served this page - the API gateway at http://localhost:5000/docs, or the Product Service itself at http://localhost:5002/docs
+security:
+  - bearerAuth: []
+tags:
+  - name: Products
+  - name: Health
+
+paths:
+  /api/products:
+    get:
+      tags: [Products]
+      summary: List products
+      description: Paged list with optional name search and sorting. Any logged-in user.
+      operationId: listProducts
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: sortBy
+          in: query
+          schema: { type: string, enum: [id, name, price, stock, createdAt, updatedAt], default: createdAt }
+        - $ref: '#/components/parameters/SortDir'
+        - name: search
+          in: query
+          description: Case-insensitive text anywhere in the product name. `%` and `_` match literally.
+          schema: { type: string, maxLength: 100 }
+          example: mouse
+      responses:
+        '200':
+          description: One page of products
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPageResponse'
+              example:
+                success: true
+                data:
+                  items:
+                    - { id: 1, name: Wireless Mouse, description: '2.4 GHz, USB receiver', price: 24.99, stock: 150, createdAt: '2026-11-03T14:30:00.123Z', updatedAt: '2026-11-03T14:30:00.123Z' }
+                  pagination: { page: 1, pageSize: 20, totalItems: 1, totalPages: 1 }
+                message: Products retrieved.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [Products]
+      summary: Create a product (Admin)
+      operationId: createProduct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductInput'
+      responses:
+        '201':
+          description: Product created
+          headers:
+            Location:
+              description: URL of the new product
+              schema: { type: string, example: /api/products/1 }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+              example:
+                success: true
+                data: { id: 1, name: Wireless Mouse, description: '2.4 GHz, USB receiver', price: 24.99, stock: 150, createdAt: '2026-11-03T14:30:00.123Z', updatedAt: '2026-11-03T14:30:00.123Z' }
+                message: Product created.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/NameTaken'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/products/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProductId'
+    get:
+      tags: [Products]
+      summary: Get a product
+      operationId: getProduct
+      responses:
+        '200':
+          description: The product
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+              example:
+                success: true
+                data: { id: 1, name: Wireless Mouse, description: '2.4 GHz, USB receiver', price: 24.99, stock: 150, createdAt: '2026-11-03T14:30:00.123Z', updatedAt: '2026-11-03T14:30:00.123Z' }
+                message: Product retrieved.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/ProductNotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [Products]
+      summary: Replace a product (Admin)
+      description: Full replace - send every field. An omitted `description` becomes `null`, an omitted `stock` becomes 0.
+      operationId: updateProduct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductInput'
+      responses:
+        '200':
+          description: Product updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+              example:
+                success: true
+                data: { id: 1, name: Wireless Mouse, description: Now with silent clicks, price: 22.99, stock: 140, createdAt: '2026-11-03T14:30:00.123Z', updatedAt: '2026-11-03T15:02:11.481Z' }
+                message: Product updated.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProductNotFound'
+        '409':
+          $ref: '#/components/responses/NameTaken'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Products]
+      summary: Delete a product (Admin)
+      description: |
+        Products that are referenced by orders cannot be deleted (409). Orders live in the Order
+        Service's own database, so this service asks the Order API (forwarding your Admin token)
+        before deleting. If the Order Service is down, the delete is refused with 503 rather than
+        done unchecked.
+      operationId: deleteProduct
+      responses:
+        '200':
+          description: Product deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletedResponse'
+              example: { success: true, data: { id: 2 }, message: Product deleted. }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ProductNotFound'
+        '409':
+          description: The product has orders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example: { success: false, error: { code: PRODUCT_HAS_ORDERS, message: Product cannot be deleted because it has orders. } }
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: The Order Service (needed for the "has orders?" check) is down or timed out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example: { success: false, error: { code: ORDER_SERVICE_UNAVAILABLE, message: The Order service is unavailable. Please try again later. } }
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      operationId: health
+      security: []
+      responses:
+        '200':
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example: { success: true, data: { status: ok, service: product-service }, message: Service is healthy. }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token from `POST /api/auth/login` (gateway port 5000, or the Auth Service on 5001).
+
+  parameters:
+    ProductId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int32, minimum: 1 }
+      example: 1
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100000, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    SortDir:
+      name: sortDir
+      in: query
+      schema: { type: string, enum: [asc, desc], default: desc }
+
+  schemas:
+    Product:
+      type: object
+      required: [id, name, description, price, stock, createdAt, updatedAt]
+      properties:
+        id: { type: integer, format: int32, example: 1 }
+        name: { type: string, example: Wireless Mouse }
+        description: { type: string, nullable: true, example: '2.4 GHz, USB receiver' }
+        price: { type: number, format: double, example: 24.99 }
+        stock: { type: integer, format: int32, example: 150 }
+        createdAt: { type: string, format: date-time, description: UTC }
+        updatedAt: { type: string, format: date-time, description: UTC }
+
+    ProductInput:
+      type: object
+      required: [name, price]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          description: Unique (case-insensitive). Trimmed.
+          example: Wireless Mouse
+        description:
+          type: string
+          nullable: true
+          maxLength: 1000
+          description: Optional. Empty or whitespace-only becomes `null`.
+          example: '2.4 GHz, USB receiver'
+        price:
+          type: number
+          minimum: 0.01
+          maximum: 999999.99
+          multipleOf: 0.01
+          description: A JSON number (not a string) with at most 2 decimal places.
+          example: 24.99
+        stock:
+          type: integer
+          minimum: 0
+          maximum: 1000000
+          default: 0
+          example: 150
+
+    Pagination:
+      type: object
+      required: [page, pageSize, totalItems, totalPages]
+      properties:
+        page: { type: integer, example: 1 }
+        pageSize: { type: integer, example: 20 }
+        totalItems: { type: integer, example: 42 }
+        totalPages: { type: integer, example: 3 }
+
+    ProductPage:
+      type: object
+      required: [items, pagination]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Product' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+
+    HealthStatus:
+      type: object
+      required: [status, service]
+      properties:
+        status: { type: string, example: ok }
+        service: { type: string, example: product-service }
+
+    ProductResponse:
+      type: object
+      required: [success, data, message]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: { $ref: '#/components/schemas/Product' }
+        message: { type: string }
+
+    ProductPageResponse:
+      type: object
+      required: [success, data, message]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: { $ref: '#/components/schemas/ProductPage' }
+        message: { type: string }
+
+    DeletedResponse:
+      type: object
+      required: [success, data, message]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data:
+          type: object
+          required: [id]
+          properties:
+            id: { type: integer, format: int32 }
+        message: { type: string }
+
+    HealthResponse:
+      type: object
+      required: [success, data, message]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: { $ref: '#/components/schemas/HealthStatus' }
+        message: { type: string }
+
+    ErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, enum: [false] }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [VALIDATION_ERROR, INVALID_JSON, PAYLOAD_TOO_LARGE, UNAUTHORIZED, FORBIDDEN, NOT_FOUND,
+                     PRODUCT_NOT_FOUND, PRODUCT_NAME_TAKEN, PRODUCT_HAS_ORDERS, ORDER_SERVICE_UNAVAILABLE, INTERNAL_ERROR]
+            message:
+              type: string
+
+  responses:
+    BadRequest:
+      description: Invalid input (path, query or body). All problems are listed in one message.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            validation:
+              summary: Field validation failed
+              value: { success: false, error: { code: VALIDATION_ERROR, message: price must have at most 2 decimal places. stock must be between 0 and 1000000. } }
+            badQuery:
+              summary: Bad query string
+              value: { success: false, error: { code: VALIDATION_ERROR, message: 'pageSize must be an integer between 1 and 100. sortBy must be one of: id, name, price, stock, createdAt, updatedAt.' } }
+            notJsonObject:
+              summary: Body missing or wrong Content-Type
+              value: { success: false, error: { code: VALIDATION_ERROR, message: 'Request body must be a JSON object (Content-Type: application/json).' } }
+            invalidJson:
+              summary: Malformed JSON
+              value: { success: false, error: { code: INVALID_JSON, message: Request body is not valid JSON. } }
+    Unauthorized:
+      description: Missing, invalid or expired access token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missing:
+              summary: Missing or invalid token
+              value: { success: false, error: { code: UNAUTHORIZED, message: Missing or invalid access token. } }
+            expired:
+              summary: Expired token
+              value: { success: false, error: { code: UNAUTHORIZED, message: Access token has expired. } }
+    Forbidden:
+      description: Logged in, but not an Admin
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: FORBIDDEN, message: You do not have permission to perform this action. } }
+    ProductNotFound:
+      description: No product with this id
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: PRODUCT_NOT_FOUND, message: Product 42 was not found. } }
+    NameTaken:
+      description: Another product already has this name (case-insensitive)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: PRODUCT_NAME_TAKEN, message: A product with this name already exists. } }
+    PayloadTooLarge:
+      description: Request body larger than 100 KB
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: PAYLOAD_TOO_LARGE, message: Request body is too large. } }
+    InternalError:
+      description: Unexpected server error. Details are logged, never returned.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: { success: false, error: { code: INTERNAL_ERROR, message: An unexpected error occurred. } }

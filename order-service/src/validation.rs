@@ -69,6 +69,17 @@ pub fn validate_list_query(params: &HashMap<String, String>) -> Result<ListQuery
         }
     };
 
+    let product_id = match non_empty(params.get("productId")) {
+        None => None,
+        Some(s) => match parse_id(s) {
+            Ok(id) => Some(id),
+            Err(_) => {
+                errors.push("productId must be a positive integer.".to_owned());
+                None
+            }
+        },
+    };
+
     if !errors.is_empty() {
         return Err(AppError::Validation(errors.join(" ")));
     }
@@ -78,6 +89,7 @@ pub fn validate_list_query(params: &HashMap<String, String>) -> Result<ListQuery
         sort_by,
         sort_dir,
         status,
+        product_id,
     })
 }
 

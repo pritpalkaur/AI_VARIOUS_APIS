@@ -2,10 +2,10 @@ import { request } from './http.js';
 
 export const authApi = {
   login: (username, password) =>
-    request('auth', '/api/auth/login', { method: 'POST', body: { username, password } }),
+    request('/api/auth/login', { method: 'POST', body: { username, password } }),
 
   register: ({ username, email, password }) =>
-    request('auth', '/api/auth/register', { method: 'POST', body: { username, email, password } }),
+    request('/api/auth/register', { method: 'POST', body: { username, email, password } }),
 
-  me: () => request('auth', '/api/auth/me'),
+  me: () => request('/api/auth/me'),
 };

@@ -168,48 +168,20 @@ export async function update(id, { name, description, price, stock }) {
 }
 
 /**
- * Deletes a product inside a transaction so the "exists?" and "has orders?" checks and the
- * DELETE run on one connection. Returns 'DELETED' | 'NOT_FOUND' | 'HAS_ORDERS'.
- * If an order is inserted between the check and the DELETE, the foreign key still blocks it
- * (surfaced as FOREIGN_KEY_VIOLATION).
+ * Deletes a product. Returns true when a row was deleted, false when no product has that id.
+ * Orders live in the Order Service's database, so the "has orders?" check happens in the
+ * service layer through the Order API, before this is called.
  */
 export async function remove(id) {
   const startedAt = performance.now();
-  const transaction = new sql.Transaction(getPool());
-  let begun = false;
-  let committed = false;
   try {
-    await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
-    begun = true;
-
-    const existing = await new sql.Request(transaction)
-      .input('Id', sql.Int, id)
-      .query('SELECT Id FROM dbo.Products WITH (UPDLOCK) WHERE Id = @Id;');
-    if (existing.recordset.length === 0) return 'NOT_FOUND';
-
-    const orders = await new sql.Request(transaction)
-      .input('Id', sql.Int, id)
-      .query('SELECT COUNT(*) AS orderCount FROM dbo.Orders WHERE ProductId = @Id;');
-    if (orders.recordset[0].orderCount > 0) return 'HAS_ORDERS';
-
-    await new sql.Request(transaction)
-      .input('Id', sql.Int, id)
-      .query('DELETE FROM dbo.Products WHERE Id = @Id;');
-
-    await transaction.commit(); // commit releases the connection
-    committed = true;
-    return 'DELETED';
+    const request = getPool().request();
+    request.input('Id', sql.Int, id);
+    const result = await request.query('DELETE FROM dbo.Products WHERE Id = @Id;');
+    return result.rowsAffected[0] > 0;
   } catch (err) {
     throw toDataAccessError(err, 'remove');
   } finally {
-    // Early return or error: roll back, which releases the transaction's connection to the pool.
-    if (begun && !committed) {
-      try {
-        await transaction.rollback();
-      } catch (rollbackErr) {
-        logger.warn('Transaction rollback failed', { repository: 'product', operation: 'remove', error: rollbackErr.message });
-      }
-    }
     logTiming('remove', startedAt);
   }
 }
