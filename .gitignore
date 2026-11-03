@@ -1,0 +1,27 @@
+# Secrets - never commit real env files
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+
+# C# / .NET
+auth-service/bin/
+auth-service/obj/
+*.user
+.vs/
+
+# Node
+node_modules/
+client/dist/
+
+# Rust
+order-service/target/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
